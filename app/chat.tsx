@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, FlatList,
-  StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator,
-  Alert, TouchableWithoutFeedback, Keyboard
+  StyleSheet, KeyboardAvoidingView, Platform,
+  Alert, TouchableWithoutFeedback, Keyboard, Animated
 } from 'react-native';
+import * as ExpoClipboard from 'expo-clipboard';
 import { useRouter } from 'expo-router';
 import { sendMessage, Message } from '../lib/api';
 import {
@@ -15,7 +16,7 @@ import {
   loadConversation, saveConversation, clearConversation,
   getTodayMessageCount, incrementTodayMessageCount, StoredMessage
 } from '../lib/conversation';
-import { buildSystemPrompt, getDailyQuestion, getDynamicOpening } from '../lib/prompts';
+import { buildSystemPrompt, getDailyQuestion, getDynamicOpening, THINKING_PROMPTS } from '../lib/prompts';
 import { THEME } from '../constants/theme';
 
 interface ChatMessage extends StoredMessage {}
@@ -33,6 +34,35 @@ const FIELD_COLORS: Record<FieldState, string> = {
   nigredo: '#666666',
   citrinitas: '#F5A623',
 };
+
+function TypingDots({ color }: { color: string }) {
+  const dots = [useRef(new Animated.Value(0)).current, useRef(new Animated.Value(0)).current, useRef(new Animated.Value(0)).current];
+  useEffect(() => {
+    const anims = dots.map((dot, i) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.delay(i * 160),
+          Animated.timing(dot, { toValue: 1, duration: 300, useNativeDriver: true }),
+          Animated.timing(dot, { toValue: 0, duration: 300, useNativeDriver: true }),
+          Animated.delay((2 - i) * 160),
+        ])
+      )
+    );
+    anims.forEach(a => a.start());
+    return () => anims.forEach(a => a.stop());
+  }, []);
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 6 }}>
+      {dots.map((dot, i) => (
+        <Animated.View key={i} style={{
+          width: 6, height: 6, borderRadius: 3,
+          backgroundColor: color,
+          opacity: dot,
+        }} />
+      ))}
+    </View>
+  );
+}
 
 function detectFieldState(text: string): FieldState | null {
   const lower = text.toLowerCase();
@@ -56,6 +86,7 @@ export default function Chat() {
   const [messageCount, setMessageCount] = useState(0);
   const [fieldState, setFieldStateLocal] = useState<FieldState>('rubedo');
   const [savedToast, setSavedToast] = useState(false);
+  const [copiedToast, setCopiedToast] = useState(false);
   const [isReturning, setIsReturning] = useState(false);
   const flatListRef = useRef<FlatList>(null);
   const router = useRouter();
@@ -156,8 +187,13 @@ export default function Chat() {
         }
       }
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Something went wrong. Try again.';
-      Alert.alert('Error', message);
+      const raw = err instanceof Error ? err.message : '';
+      const isOffline = raw.toLowerCase().includes('network') || raw.toLowerCase().includes('fetch') || raw.toLowerCase().includes('failed');
+      if (isOffline) {
+        Alert.alert('No connection', 'Check your internet connection and try again.');
+      } else {
+        Alert.alert('Something went wrong', raw || 'Try again.');
+      }
     } finally {
       setLoading(false);
     }
@@ -182,6 +218,12 @@ export default function Chat() {
     await saveReflection(msg.content, path);
     setSavedToast(true);
     setTimeout(() => setSavedToast(false), 2000);
+  }
+
+  function handleCopy(text: string) {
+    ExpoClipboard.setStringAsync(text);
+    setCopiedToast(true);
+    setTimeout(() => setCopiedToast(false), 1800);
   }
 
   const dailyQuestion = getDailyQuestion();
@@ -225,19 +267,31 @@ export default function Chat() {
           </View>
         )}
 
-        {/* Daily question card — only on fresh conversations */}
+        {/* Daily question card + thinking prompts — only on fresh conversations */}
         {messages.length <= 1 && !isReturning && (
-          <TouchableOpacity
-            style={styles.questionCard}
-            onPress={() => {
-              setInput(dailyQuestion);
-            }}
-            activeOpacity={0.75}
-          >
-            <Text style={styles.questionLabel}>TODAY'S QUESTION</Text>
-            <Text style={styles.questionText}>{dailyQuestion}</Text>
-            <Text style={styles.questionHint}>tap to explore →</Text>
-          </TouchableOpacity>
+          <View>
+            <TouchableOpacity
+              style={styles.questionCard}
+              onPress={() => setInput(dailyQuestion)}
+              activeOpacity={0.75}
+            >
+              <Text style={styles.questionLabel}>TODAY'S QUESTION</Text>
+              <Text style={styles.questionText}>{dailyQuestion}</Text>
+              <Text style={styles.questionHint}>tap to explore →</Text>
+            </TouchableOpacity>
+            <View style={styles.promptsRow}>
+              {(THINKING_PROMPTS[path] ?? THINKING_PROMPTS.none).map((p, i) => (
+                <TouchableOpacity
+                  key={i}
+                  style={styles.promptChip}
+                  onPress={() => setInput(p)}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.promptChipText}>{p}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
         )}
 
         {/* Messages */}
@@ -265,25 +319,35 @@ export default function Chat() {
                   {item.content}
                 </Text>
                 {item.role === 'assistant' && item.id !== 'welcome' && (
-                  <Text style={styles.longPressHint}>hold to save</Text>
+                  <View style={styles.bubbleActions}>
+                    <Text style={styles.longPressHint}>hold to save</Text>
+                    <TouchableOpacity onPress={() => handleCopy(item.content)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                      <Text style={styles.copyBtn}>copy</Text>
+                    </TouchableOpacity>
+                  </View>
                 )}
               </View>
             </TouchableWithoutFeedback>
           )}
         />
 
-        {/* Loading */}
+        {/* Loading — animated dots */}
         {loading && (
           <View style={styles.loadingRow}>
             <Text style={[styles.loadingGlyph, { color: fieldColor }]}>{fieldGlyph}</Text>
-            <ActivityIndicator color={fieldColor} size="small" style={{ marginLeft: 8 }} />
+            <TypingDots color={fieldColor} />
           </View>
         )}
 
-        {/* Saved toast */}
+        {/* Toasts */}
         {savedToast && (
           <View style={styles.toast}>
             <Text style={styles.toastText}>Saved to Notebook ✓</Text>
+          </View>
+        )}
+        {copiedToast && (
+          <View style={styles.toast}>
+            <Text style={styles.toastText}>Copied ✓</Text>
           </View>
         )}
 
@@ -385,6 +449,17 @@ const styles = StyleSheet.create({
   questionText: { fontSize: 15, color: THEME.text, lineHeight: 23, marginBottom: 10 },
   questionHint: { fontSize: 11, color: THEME.textDim },
 
+  promptsRow: { flexDirection: 'column', gap: 6, marginHorizontal: 16, marginTop: 8, marginBottom: 4 },
+  promptChip: {
+    backgroundColor: THEME.surface,
+    borderWidth: 1,
+    borderColor: THEME.border,
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  promptChipText: { fontSize: 13, color: THEME.textMuted, fontStyle: 'italic' },
+
   messageList: { paddingHorizontal: 16, paddingVertical: 12, gap: 10 },
   bubble: { maxWidth: '88%', padding: 14, borderRadius: 14 },
   welcomeBubble: {
@@ -410,7 +485,9 @@ const styles = StyleSheet.create({
   bubbleText: { fontSize: 15, lineHeight: 23 },
   userText: { color: '#E8D098' },
   aiText: { color: THEME.text },
-  longPressHint: { fontSize: 9, color: THEME.textDim, marginTop: 8, textAlign: 'right' },
+  bubbleActions: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 },
+  longPressHint: { fontSize: 9, color: THEME.textDim },
+  copyBtn: { fontSize: 9, color: THEME.textDim },
 
   loadingRow: {
     flexDirection: 'row',

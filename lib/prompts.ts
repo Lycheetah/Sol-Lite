@@ -156,6 +156,29 @@ export function getDynamicOpening(path: string, streak: number): string {
   return OPENINGS[p][tier][time];
 }
 
+export const THINKING_PROMPTS: Record<string, string[]> = {
+  think: [
+    "There's a belief I've never really examined...",
+    "I keep going in circles on something...",
+    "I need to think through a decision...",
+  ],
+  self: [
+    "There's a pattern I keep repeating...",
+    "I'm not sure why I reacted the way I did...",
+    "Something feels off and I can't name it...",
+  ],
+  build: [
+    "I'm stuck on a problem and need to think out loud...",
+    "Here's what I'm trying to build...",
+    "I need to pressure-test an idea...",
+  ],
+  none: [
+    "Something's been on my mind...",
+    "I want to think through something...",
+    "I have a question I can't quite articulate...",
+  ],
+};
+
 export function buildSystemPrompt(userName: string, path: string): string {
   const pathContext: Record<string, string> = {
     think: 'thinking clearly and untangling complex problems',
